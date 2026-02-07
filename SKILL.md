@@ -1,7 +1,9 @@
-# SKILL: search-cluster
+---
+name: search-cluster
+description: Unified search tool for Google, Wikipedia, Reddit, and RSS feeds with Redis caching. Use when user asks "search for X", "who is Y", "latest news on Z".
+---
 
-## Description
-Unified search tool for Google, Wikipedia, Reddit, and RSS feeds with Redis caching. Use when user asks "search for X", "who is Y", "latest news on Z".
+# Search Cluster
 
 ## Setup
 1.  Copy `.env.example` to `.env`.
