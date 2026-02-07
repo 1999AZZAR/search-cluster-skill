@@ -12,8 +12,8 @@ import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 
 # Config
-GOOGLE_API_KEY = "AIzaSyCYswJ5-JIuloovaOv_gKxdHFFzYMsbKdw"
-GOOGLE_CSE_ID = "c70f404e8d6404c7c"
+GOOGLE_API_KEY = os.getenv("GOOGLE_CSE_KEY", "default_key")
+GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID", "default_id")
 REDIS_CONTAINER = "wiki_stream-redis-1"
 CACHE_TTL = 86400  # 24 hours
 
