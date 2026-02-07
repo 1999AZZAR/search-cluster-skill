@@ -1,0 +1,16 @@
+# .gitignore
+# Secrets
+.env
+*.json
+*.pem
+*.token
+*.key
+
+# Cache
+__pycache__/
+.cache/
+dump.rdb
+appendonly.aof
+
+# Logs
+*.log

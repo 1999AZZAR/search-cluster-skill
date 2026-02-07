@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+import sys
+import json
+import subprocess
+import hashlib
+import urllib.request
+import urllib.parse
+import re
+import ssl
+
+# Bypass SSL for sandbox
+ssl._create_default_https_context = ssl._create_unverified_context
+
+# Config
+GOOGLE_API_KEY = "AIzaSyCYswJ5-JIuloovaOv_gKxdHFFzYMsbKdw"
+GOOGLE_CSE_ID = "c70f404e8d6404c7c"
+REDIS_CONTAINER = "wiki_stream-redis-1"
+CACHE_TTL = 86400  # 24 hours
+
+def redis_set(key, value):
+    try:
+        subprocess.run(
+            ["docker", "exec", REDIS_CONTAINER, "redis-cli", "setex", key, str(CACHE_TTL), value],
+            capture_output=True, check=True
+        )
+    except:
+        pass
+
+def redis_get(key):
+    try:
+        res = subprocess.run(
+            ["docker", "exec", REDIS_CONTAINER, "redis-cli", "get", key],
+            capture_output=True, check=True
+        )
+        val = res.stdout.decode().strip()
+        return val if val and val != "nil" else None
+    except:
+        return None
+
+def fetch_json(url, headers={}):
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req) as response:
+        return json.loads(response.read().decode())
+
+def google_search(query):
+    cache_key = f"search:google:{hashlib.md5(query.encode()).hexdigest()}"
+    cached = redis_get(cache_key)
+    if cached: return json.loads(cached)
+
+    url = f"https://www.googleapis.com/customsearch/v1?key={GOOGLE_API_KEY}&cx={GOOGLE_CSE_ID}&q={urllib.parse.quote(query)}"
+    data = fetch_json(url)
+    results = []
+    if "items" in data:
+        for item in data["items"]:
+            results.append({"title": item["title"], "link": item["link"], "snippet": item.get("snippet", "")})
+    
+    redis_set(cache_key, json.dumps(results))
+    return results
+
+def wiki_search(query):
+    cache_key = f"search:wiki:{hashlib.md5(query.encode()).hexdigest()}"
+    cached = redis_get(cache_key)
+    if cached: return json.loads(cached)
+
+    url = f"https://en.wikipedia.org/w/api.php?action=opensearch&search={urllib.parse.quote(query)}&limit=5&namespace=0&format=json"
+    data = fetch_json(url)
+    results = []
+    for i in range(len(data[1])):
+        results.append({"title": data[1][i], "link": data[3][i], "snippet": data[2][i]})
+    
+    redis_set(cache_key, json.dumps(results))
+    return results
+
+def reddit_search(query):
+    cache_key = f"search:reddit:{hashlib.md5(query.encode()).hexdigest()}"
+    cached = redis_get(cache_key)
+    if cached: return json.loads(cached)
+
+    headers = {"User-Agent": "MemaSearchBot/1.0"}
+    url = f"https://www.reddit.com/search.json?q={urllib.parse.quote(query)}&limit=5"
+    data = fetch_json(url, headers=headers)
+    results = []
+    if "data" in data and "children" in data["data"]:
+        for child in data["data"]["children"]:
+            post = child["data"]
+            results.append({
+                "title": post["title"],
+                "link": f"https://reddit.com{post['permalink']}",
+                "snippet": f"Subreddit: {post['subreddit']} | Score: {post['score']}"
+            })
+    
+    redis_set(cache_key, json.dumps(results))
+    return results
+
+def rss_fetch(url):
+    cache_key = f"search:rss:{hashlib.md5(url.encode()).hexdigest()}"
+    cached = redis_get(cache_key)
+    if cached: return json.loads(cached)
+
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req) as response:
+        text = response.read().decode()
+    
+    items = re.findall(r'<item>(.*?)</item>', text, re.DOTALL)
+    results = []
+    for item in items[:10]:
+        title_match = re.search(r'<title>(.*?)</title>', item)
+        link_match = re.search(r'<link>(.*?)</link>', item)
+        results.append({
+            "title": title_match.group(1) if title_match else "No Title",
+            "link": link_match.group(1) if link_match else "No Link"
+        })
+    
+    redis_set(cache_key, json.dumps(results))
+    return results
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: search-cluster [google|wiki|reddit|rss] <query/url>")
+        sys.exit(1)
+
+    source = sys.argv[1]
+    query = sys.argv[2]
+
+    try:
+        if source == "google":
+            print(json.dumps(google_search(query), indent=2))
+        elif source == "wiki":
+            print(json.dumps(wiki_search(query), indent=2))
+        elif source == "reddit":
+            print(json.dumps(reddit_search(query), indent=2))
+        elif source == "rss":
+            print(json.dumps(rss_fetch(query), indent=2))
+        else:
+            print(f"Unknown source: {source}")
+            sys.exit(1)
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
+        sys.exit(1)
