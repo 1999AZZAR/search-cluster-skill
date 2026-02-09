@@ -6,53 +6,120 @@ import subprocess
 import hashlib
 import urllib.request
 import urllib.parse
+import urllib.error
 import re
 import ssl
+import time
+import argparse
+import concurrent.futures
+import xml.etree.ElementTree as ET
+from datetime import datetime
 
-# Bypass SSL for sandbox
+# Bypass SSL for sandbox environment
 ssl._create_default_https_context = ssl._create_unverified_context
 
-# Load .env manually
-env_path = os.path.join(os.path.dirname(__file__), '../.env')
-if os.path.exists(env_path):
-    with open(env_path) as f:
+# --- Configuration ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_PATH = os.path.join(BASE_DIR, '../.env')
+
+# Load .env manually if python-dotenv not available
+if os.path.exists(ENV_PATH):
+    with open(ENV_PATH) as f:
         for line in f:
             if '=' in line and not line.strip().startswith('#'):
                 k, v = line.strip().split('=', 1)
                 os.environ[k] = v.strip().strip('"').strip("'")
 
-# Config
-GOOGLE_API_KEY = os.getenv("GOOGLE_CSE_KEY", "default_key")
-GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID", "default_id")
-REDIS_CONTAINER = "wiki_stream-redis-1"
+# API Keys
+GOOGLE_API_KEY = os.getenv("GOOGLE_CSE_KEY") or os.getenv("GOOGLE_API_KEY")
+GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
+
+# Redis Config
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_CONTAINER = os.getenv("REDIS_CONTAINER", "wiki_stream-redis-1")
 CACHE_TTL = 86400  # 24 hours
 
+# User Agent
+USER_AGENT = os.getenv("REDDIT_USER_AGENT", "SearchClusterBot/1.0 (by /u/SearchClusterDev)")
+
+# --- Redis Client (with Fallback) ---
+redis_client = None
+try:
+    import redis
+    try:
+        redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True, socket_connect_timeout=2)
+        redis_client.ping()
+    except Exception:
+        redis_client = None
+except ImportError:
+    redis_client = None
+
 def redis_set(key, value):
+    if redis_client:
+        try:
+            redis_client.setex(key, CACHE_TTL, value)
+            return
+        except:
+            pass
+    
+    # Fallback to Docker Exec
     try:
         subprocess.run(
             ["docker", "exec", REDIS_CONTAINER, "redis-cli", "setex", key, str(CACHE_TTL), value],
-            capture_output=True, check=True
+            capture_output=True, check=False
         )
     except:
         pass
 
 def redis_get(key):
+    if redis_client:
+        try:
+            return redis_client.get(key)
+        except:
+            pass
+            
+    # Fallback to Docker Exec
     try:
         res = subprocess.run(
             ["docker", "exec", REDIS_CONTAINER, "redis-cli", "get", key],
-            capture_output=True, check=True
+            capture_output=True, check=False
         )
         val = res.stdout.decode().strip()
         return val if val and val != "nil" else None
     except:
         return None
 
-def fetch_json(url, headers={}):
+# --- Networking Helper ---
+def fetch_url(url, headers=None, timeout=10):
+    if headers is None:
+        headers = {"User-Agent": USER_AGENT}
+    
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req) as response:
-        return json.loads(response.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return response.read()
+    except urllib.error.HTTPError as e:
+        # Graceful failure for 429/403
+        return None
+    except Exception:
+        return None
+
+def fetch_json(url, headers=None):
+    data = fetch_url(url, headers)
+    if data:
+        try:
+            return json.loads(data.decode())
+        except:
+            return {}
+    return {}
+
+# --- Search Providers ---
 
 def google_search(query):
+    if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
+        return {"error": "Missing Google API Key or CSE ID"}
+
     cache_key = f"search:google:{hashlib.md5(query.encode()).hexdigest()}"
     cached = redis_get(cache_key)
     if cached: return json.loads(cached)
@@ -60,11 +127,18 @@ def google_search(query):
     url = f"https://www.googleapis.com/customsearch/v1?key={GOOGLE_API_KEY}&cx={GOOGLE_CSE_ID}&q={urllib.parse.quote(query)}"
     data = fetch_json(url)
     results = []
+    
     if "items" in data:
         for item in data["items"]:
-            results.append({"title": item["title"], "link": item["link"], "snippet": item.get("snippet", "")})
+            results.append({
+                "source": "google",
+                "title": item.get("title"),
+                "link": item.get("link"),
+                "snippet": item.get("snippet", "")
+            })
     
-    redis_set(cache_key, json.dumps(results))
+    if results:
+        redis_set(cache_key, json.dumps(results))
     return results
 
 def wiki_search(query):
@@ -75,10 +149,18 @@ def wiki_search(query):
     url = f"https://en.wikipedia.org/w/api.php?action=opensearch&search={urllib.parse.quote(query)}&limit=5&namespace=0&format=json"
     data = fetch_json(url)
     results = []
-    for i in range(len(data[1])):
-        results.append({"title": data[1][i], "link": data[3][i], "snippet": data[2][i]})
     
-    redis_set(cache_key, json.dumps(results))
+    if isinstance(data, list) and len(data) > 3:
+        for i in range(len(data[1])):
+            results.append({
+                "source": "wiki",
+                "title": data[1][i],
+                "link": data[3][i],
+                "snippet": data[2][i]
+            })
+            
+    if results:
+        redis_set(cache_key, json.dumps(results))
     return results
 
 def reddit_search(query):
@@ -86,20 +168,25 @@ def reddit_search(query):
     cached = redis_get(cache_key)
     if cached: return json.loads(cached)
 
-    headers = {"User-Agent": "MemaSearchBot/1.0"}
-    url = f"https://www.reddit.com/search.json?q={urllib.parse.quote(query)}&limit=5"
+    # Use specialized User-Agent to avoid blocks
+    headers = {"User-Agent": USER_AGENT}
+    url = f"https://www.reddit.com/search.json?q={urllib.parse.quote(query)}&limit=5&sort=relevance"
+    
     data = fetch_json(url, headers=headers)
     results = []
+    
     if "data" in data and "children" in data["data"]:
         for child in data["data"]["children"]:
             post = child["data"]
             results.append({
-                "title": post["title"],
-                "link": f"https://reddit.com{post['permalink']}",
-                "snippet": f"Subreddit: {post['subreddit']} | Score: {post['score']}"
+                "source": "reddit",
+                "title": post.get("title"),
+                "link": f"https://reddit.com{post.get('permalink')}",
+                "snippet": f"Subreddit: r/{post.get('subreddit')} | Score: {post.get('score')} | {post.get('selftext', '')[:100]}..."
             })
-    
-    redis_set(cache_key, json.dumps(results))
+            
+    if results:
+        redis_set(cache_key, json.dumps(results))
     return results
 
 def rss_fetch(url):
@@ -107,43 +194,95 @@ def rss_fetch(url):
     cached = redis_get(cache_key)
     if cached: return json.loads(cached)
 
-    req = urllib.request.Request(url)
-    with urllib.request.urlopen(req) as response:
-        text = response.read().decode()
-    
-    items = re.findall(r'<item>(.*?)</item>', text, re.DOTALL)
+    xml_data = fetch_url(url)
+    if not xml_data:
+        return []
+
     results = []
-    for item in items[:10]:
-        title_match = re.search(r'<title>(.*?)</title>', item)
-        link_match = re.search(r'<link>(.*?)</link>', item)
-        results.append({
-            "title": title_match.group(1) if title_match else "No Title",
-            "link": link_match.group(1) if link_match else "No Link"
-        })
-    
-    redis_set(cache_key, json.dumps(results))
+    try:
+        root = ET.fromstring(xml_data)
+        # Handle RSS 2.0
+        for item in root.findall(".//item")[:5]:
+            title = item.find("title")
+            link = item.find("link")
+            desc = item.find("description")
+            results.append({
+                "source": "rss",
+                "title": title.text if title is not None else "No Title",
+                "link": link.text if link is not None else url,
+                "snippet": desc.text[:200] if desc is not None and desc.text else ""
+            })
+        
+        # Handle Atom if RSS failed or empty (basic check)
+        if not results:
+            for entry in root.findall(".//{http://www.w3.org/2005/Atom}entry")[:5]:
+                title = entry.find("{http://www.w3.org/2005/Atom}title")
+                link = entry.find("{http://www.w3.org/2005/Atom}link")
+                summary = entry.find("{http://www.w3.org/2005/Atom}summary")
+                results.append({
+                    "source": "rss",
+                    "title": title.text if title is not None else "No Title",
+                    "link": link.attrib.get("href") if link is not None else url,
+                    "snippet": summary.text[:200] if summary is not None and summary.text else ""
+                })
+
+    except ET.ParseError:
+        return [{"error": "Failed to parse RSS feed"}]
+
+    if results:
+        redis_set(cache_key, json.dumps(results))
     return results
 
+def search_all(query):
+    """Query all sources in parallel and aggregate results."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        future_google = executor.submit(google_search, query)
+        future_wiki = executor.submit(wiki_search, query)
+        future_reddit = executor.submit(reddit_search, query)
+        
+        # Collect results
+        results = []
+        try:
+            g_res = future_google.result()
+            if isinstance(g_res, list): results.extend(g_res)
+        except: pass
+        
+        try:
+            w_res = future_wiki.result()
+            if isinstance(w_res, list): results.extend(w_res)
+        except: pass
+        
+        try:
+            r_res = future_reddit.result()
+            if isinstance(r_res, list): results.extend(r_res)
+        except: pass
+        
+    return results
+
+# --- Main ---
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: search-cluster [google|wiki|reddit|rss] <query/url>")
+    parser = argparse.ArgumentParser(description="Search Cluster Tool")
+    parser.add_argument("source", choices=["google", "wiki", "reddit", "rss", "all"], help="Search source")
+    parser.add_argument("query", help="Search query or RSS URL")
+    
+    if len(sys.argv) == 1:
+        parser.print_help()
         sys.exit(1)
-
-    source = sys.argv[1]
-    query = sys.argv[2]
-
+        
+    args = parser.parse_args()
+    
     try:
-        if source == "google":
-            print(json.dumps(google_search(query), indent=2))
-        elif source == "wiki":
-            print(json.dumps(wiki_search(query), indent=2))
-        elif source == "reddit":
-            print(json.dumps(reddit_search(query), indent=2))
-        elif source == "rss":
-            print(json.dumps(rss_fetch(query), indent=2))
-        else:
-            print(f"Unknown source: {source}")
-            sys.exit(1)
+        if args.source == "google":
+            print(json.dumps(google_search(args.query), indent=2))
+        elif args.source == "wiki":
+            print(json.dumps(wiki_search(args.query), indent=2))
+        elif args.source == "reddit":
+            print(json.dumps(reddit_search(args.query), indent=2))
+        elif args.source == "rss":
+            print(json.dumps(rss_fetch(args.query), indent=2))
+        elif args.source == "all":
+            print(json.dumps(search_all(args.query), indent=2))
+            
     except Exception as e:
         print(json.dumps({"error": str(e)}))
         sys.exit(1)
