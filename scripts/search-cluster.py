@@ -2,7 +2,6 @@
 import sys
 import os
 import json
-import subprocess
 import hashlib
 import urllib.request
 import urllib.parse
@@ -15,20 +14,9 @@ import concurrent.futures
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
-# Bypass SSL for sandbox environment
-ssl._create_default_https_context = ssl._create_unverified_context
-
 # --- Configuration ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ENV_PATH = os.path.join(BASE_DIR, '../.env')
-
-# Load .env manually if python-dotenv not available
-if os.path.exists(ENV_PATH):
-    with open(ENV_PATH) as f:
-        for line in f:
-            if '=' in line and not line.strip().startswith('#'):
-                k, v = line.strip().split('=', 1)
-                os.environ[k] = v.strip().strip('"').strip("'")
+# DO NOT LOAD .env implicitly from parent dirs to avoid leaking host secrets.
+# Users should source .env before running or pass vars explicitly.
 
 # API Keys
 GOOGLE_API_KEY = os.getenv("GOOGLE_CSE_KEY") or os.getenv("GOOGLE_API_KEY")
@@ -37,13 +25,12 @@ GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
 # Redis Config
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_CONTAINER = os.getenv("REDIS_CONTAINER", "wiki_stream-redis-1")
 CACHE_TTL = 86400  # 24 hours
 
 # User Agent
-USER_AGENT = os.getenv("REDDIT_USER_AGENT", "SearchClusterBot/1.0 (by /u/SearchClusterDev)")
+USER_AGENT = os.getenv("REDDIT_USER_AGENT", "SearchClusterBot/1.0")
 
-# --- Redis Client (with Fallback) ---
+# --- Redis Client ---
 redis_client = None
 try:
     import redis
@@ -51,26 +38,18 @@ try:
         redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True, socket_connect_timeout=2)
         redis_client.ping()
     except Exception:
+        # Redis optional, continue without cache if unreachable
         redis_client = None
 except ImportError:
+    # Redis optional
     redis_client = None
 
 def redis_set(key, value):
     if redis_client:
         try:
             redis_client.setex(key, CACHE_TTL, value)
-            return
         except:
             pass
-    
-    # Fallback to Docker Exec
-    try:
-        subprocess.run(
-            ["docker", "exec", REDIS_CONTAINER, "redis-cli", "setex", key, str(CACHE_TTL), value],
-            capture_output=True, check=False
-        )
-    except:
-        pass
 
 def redis_get(key):
     if redis_client:
@@ -78,17 +57,7 @@ def redis_get(key):
             return redis_client.get(key)
         except:
             pass
-            
-    # Fallback to Docker Exec
-    try:
-        res = subprocess.run(
-            ["docker", "exec", REDIS_CONTAINER, "redis-cli", "get", key],
-            capture_output=True, check=False
-        )
-        val = res.stdout.decode().strip()
-        return val if val and val != "nil" else None
-    except:
-        return None
+    return None
 
 # --- Networking Helper ---
 def fetch_url(url, headers=None, timeout=10):
@@ -96,11 +65,16 @@ def fetch_url(url, headers=None, timeout=10):
         headers = {"User-Agent": USER_AGENT}
     
     req = urllib.request.Request(url, headers=headers)
+    
+    # SSL Context - Secure by default
+    # If users need to bypass, they should configure certificates properly on the host
+    # We do NOT disable SSL verification globally.
+    ctx = ssl.create_default_context()
+    
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as response:
             return response.read()
     except urllib.error.HTTPError as e:
-        # Graceful failure for 429/403
         return None
     except Exception:
         return None
@@ -168,7 +142,6 @@ def reddit_search(query):
     cached = redis_get(cache_key)
     if cached: return json.loads(cached)
 
-    # Use specialized User-Agent to avoid blocks
     headers = {"User-Agent": USER_AGENT}
     url = f"https://www.reddit.com/search.json?q={urllib.parse.quote(query)}&limit=5&sort=relevance"
     
