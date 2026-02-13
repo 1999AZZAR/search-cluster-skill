@@ -6,7 +6,7 @@ description: Unified search tool for Google, Wikipedia, Reddit, and RSS feeds wi
 # Search Cluster
 
 ## Overview
-A unified search aggregator that queries multiple sources (Google, Wikipedia, Reddit, RSS) in parallel. It caches results in Redis to optimize performance and reduce API usage.
+A unified search aggregator that queries multiple sources (Google, Wikipedia, Reddit, RSS, NewsAPI) in parallel. It caches results in Redis to optimize performance and reduce API usage.
 
 ## Setup
 1.  Copy `.env.example` to `.env`.
@@ -20,6 +20,7 @@ This skill requires the following environment variables in `.env`:
 | :--- | :--- | :--- |
 | `GOOGLE_CSE_KEY` | Google Custom Search JSON API Key | Yes (for Google) |
 | `GOOGLE_CSE_ID` | Google Custom Search Engine ID (cx) | Yes (for Google) |
+| `NEWSAPI_KEY` | NewsAPI.org API Key (free tier: 100 req/day) | Yes (for NewsAPI) |
 | `REDIS_HOST` | Redis hostname (default: localhost) | No |
 | `REDIS_PORT` | Redis port (default: 6379) | No |
 | `REDDIT_USER_AGENT`| Custom User-Agent for Reddit API | No |
@@ -44,6 +45,9 @@ python3 scripts/search-cluster.py <SOURCE> <QUERY>
 ```bash
 # Search Google
 python3 scripts/search-cluster.py google "query"
+
+# Search NewsAPI (Latest News)
+python3 scripts/search-cluster.py newsapi "artificial intelligence"
 
 # Search All Sources (Parallel)
 python3 scripts/search-cluster.py all "query"

@@ -21,6 +21,7 @@ from datetime import datetime
 # API Keys
 GOOGLE_API_KEY = os.getenv("GOOGLE_CSE_KEY") or os.getenv("GOOGLE_API_KEY")
 GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
+NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 
 # Redis Config
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -137,6 +138,37 @@ def wiki_search(query):
         redis_set(cache_key, json.dumps(results))
     return results
 
+def newsapi_search(query):
+    if not NEWSAPI_KEY:
+        return {"error": "Missing NEWSAPI_KEY"}
+
+    cache_key = f"search:newsapi:{hashlib.md5(query.encode()).hexdigest()}"
+    cached = redis_get(cache_key)
+    if cached: return json.loads(cached)
+
+    # Use 'q' param for general search, 'qInTitle' for title-only
+    encoded_query = urllib.parse.quote(query)
+    url = f"https://newsapi.org/v2/everything?q={encoded_query}&sortBy=publishedAt&language=en&pageSize=10&apiKey={NEWSAPI_KEY}"
+
+    data = fetch_json(url)
+    results = []
+
+    if data.get("status") == "ok" and "articles" in data:
+        for article in data["articles"]:
+            results.append({
+                "source": "newsapi",
+                "title": article.get("title", "No Title"),
+                "link": article.get("url", ""),
+                "snippet": article.get("description", "")[:200],
+                "published": article.get("publishedAt", ""),
+                "author": article.get("author", "Unknown"),
+                "image": article.get("urlToImage", None)
+            })
+
+    if results:
+        redis_set(cache_key, json.dumps(results))
+    return results
+
 def reddit_search(query):
     cache_key = f"search:reddit:{hashlib.md5(query.encode()).hexdigest()}"
     cached = redis_get(cache_key)
@@ -212,6 +244,7 @@ def search_all(query):
         future_google = executor.submit(google_search, query)
         future_wiki = executor.submit(wiki_search, query)
         future_reddit = executor.submit(reddit_search, query)
+        future_newsapi = executor.submit(newsapi_search, query)
         
         # Collect results
         results = []
@@ -229,13 +262,18 @@ def search_all(query):
             r_res = future_reddit.result()
             if isinstance(r_res, list): results.extend(r_res)
         except: pass
-        
+
+        try:
+            n_res = future_newsapi.result()
+            if isinstance(n_res, list): results.extend(n_res)
+        except: pass
+
     return results
 
 # --- Main ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Search Cluster Tool")
-    parser.add_argument("source", choices=["google", "wiki", "reddit", "rss", "all"], help="Search source")
+    parser.add_argument("source", choices=["google", "wiki", "reddit", "rss", "newsapi", "all"], help="Search source")
     parser.add_argument("query", help="Search query or RSS URL")
     
     if len(sys.argv) == 1:
@@ -253,6 +291,8 @@ if __name__ == "__main__":
             print(json.dumps(reddit_search(args.query), indent=2))
         elif args.source == "rss":
             print(json.dumps(rss_fetch(args.query), indent=2))
+        elif args.source == "newsapi":
+            print(json.dumps(newsapi_search(args.query), indent=2))
         elif args.source == "all":
             print(json.dumps(search_all(args.query), indent=2))
             
