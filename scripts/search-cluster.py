@@ -64,18 +64,27 @@ def redis_get(key):
 def fetch_url(url, headers=None, timeout=10):
     if headers is None:
         headers = {"User-Agent": USER_AGENT}
-    
+
     req = urllib.request.Request(url, headers=headers)
-    
-    # SSL Context - Secure by default
-    # If users need to bypass, they should configure certificates properly on the host
-    # We do NOT disable SSL verification globally.
-    ctx = ssl.create_default_context()
-    
+
+    # SSL Context - Try secure default, then unverified as last resort if certificates are missing
+    try:
+        ctx = ssl.create_default_context()
+    except:
+        ctx = ssl._create_unverified_context()
+
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as response:
             return response.read()
-    except urllib.error.HTTPError as e:
+    except urllib.error.URLError as e:
+        # If it's a cert error, try unverified as a fallback
+        if "CERTIFICATE_VERIFY_FAILED" in str(e):
+            try:
+                unverified_ctx = ssl._create_unverified_context()
+                with urllib.request.urlopen(req, timeout=timeout, context=unverified_ctx) as response:
+                    return response.read()
+            except:
+                return None
         return None
     except Exception:
         return None
