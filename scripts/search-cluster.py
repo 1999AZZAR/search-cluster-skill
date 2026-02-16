@@ -15,9 +15,6 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 
 # --- Configuration ---
-# DO NOT LOAD .env implicitly from parent dirs to avoid leaking host secrets.
-# Users should source .env before running or pass vars explicitly.
-
 # API Keys
 GOOGLE_API_KEY = os.getenv("GOOGLE_CSE_KEY") or os.getenv("GOOGLE_API_KEY")
 GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
@@ -36,6 +33,8 @@ redis_client = None
 try:
     import redis
     try:
+        # Strictly prefer localhost unless explicitly configured otherwise.
+        # Connection timeout set to 2s to avoid hanging.
         redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True, socket_connect_timeout=2)
         redis_client.ping()
     except Exception:
@@ -61,31 +60,22 @@ def redis_get(key):
     return None
 
 # --- Networking Helper ---
-def fetch_url(url, headers=None, timeout=10):
+def fetch_url(url, headers=None, timeout=10, verify_ssl=True):
     if headers is None:
         headers = {"User-Agent": USER_AGENT}
 
     req = urllib.request.Request(url, headers=headers)
 
-    # SSL Context - Try secure default, then unverified as last resort if certificates are missing
-    try:
+    # Use secure default context by default.
+    # Unverified context only created if verify_ssl=False is explicitly requested.
+    if verify_ssl:
         ctx = ssl.create_default_context()
-    except:
+    else:
         ctx = ssl._create_unverified_context()
 
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as response:
             return response.read()
-    except urllib.error.URLError as e:
-        # If it's a cert error, try unverified as a fallback
-        if "CERTIFICATE_VERIFY_FAILED" in str(e):
-            try:
-                unverified_ctx = ssl._create_unverified_context()
-                with urllib.request.urlopen(req, timeout=timeout, context=unverified_ctx) as response:
-                    return response.read()
-            except:
-                return None
-        return None
     except Exception:
         return None
 
@@ -155,7 +145,6 @@ def newsapi_search(query):
     cached = redis_get(cache_key)
     if cached: return json.loads(cached)
 
-    # Use 'q' param for general search, 'qInTitle' for title-only
     encoded_query = urllib.parse.quote(query)
     url = f"https://newsapi.org/v2/everything?q={encoded_query}&sortBy=publishedAt&language=en&pageSize=10&apiKey={NEWSAPI_KEY}"
 
@@ -227,7 +216,7 @@ def rss_fetch(url):
                 "snippet": desc.text[:200] if desc is not None and desc.text else ""
             })
         
-        # Handle Atom if RSS failed or empty (basic check)
+        # Handle Atom
         if not results:
             for entry in root.findall(".//{http://www.w3.org/2005/Atom}entry")[:5]:
                 title = entry.find("{http://www.w3.org/2005/Atom}title")
@@ -255,7 +244,6 @@ def search_all(query):
         future_reddit = executor.submit(reddit_search, query)
         future_newsapi = executor.submit(newsapi_search, query)
         
-        # Collect results
         results = []
         try:
             g_res = future_google.result()
