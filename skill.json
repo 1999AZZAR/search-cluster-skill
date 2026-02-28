@@ -1,0 +1,13 @@
+{
+  "name": "search-cluster",
+  "version": "3.0.0",
+  "description": "Standard Aggregated Search Engine (Google, Wiki, Reddit, GNews, Scrapling).",
+  "author": "Mema",
+  "env_vars": [
+    { "name": "GOOGLE_API_KEY", "description": "Google API Key", "required": false },
+    { "name": "GOOGLE_CSE_ID", "description": "Google CSE ID", "required": false },
+    { "name": "SCRAPLING_PYTHON_PATH", "description": "Path to scrapling python binary", "required": false },
+    { "name": "REDIS_HOST", "description": "Optional Redis host for caching", "required": false }
+  ],
+  "binaries": ["python3"]
+}
