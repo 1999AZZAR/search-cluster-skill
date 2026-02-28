@@ -12,23 +12,21 @@ import subprocess
 import xml.etree.ElementTree as ET
 import re
 
-# --- Configuration (Standard v3.3) ---
+# Configuration
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 SCRAPLING_PYTHON = os.getenv("SCRAPLING_PYTHON_PATH", "python3")
 STEALTH_SCRIPT = os.path.join(os.path.dirname(__file__), "stealth_fetch.py")
-USER_AGENT = os.getenv("SEARCH_USER_AGENT", "SearchCluster/3.3")
+USER_AGENT = os.getenv("SEARCH_USER_AGENT", "SearchCluster/3.4")
 
-# --- Internal Scrubber (IPI Defense) ---
 def internal_sanitize(text):
     if not text: return ""
     text = re.sub(r'ignore .*instructions|system override|you are now', '[REDACTED]', text, flags=re.I)
     text = "".join(ch for ch in text if ch.isprintable() or ch in ['\n', '\r', '\t'])
     return text.strip()
 
-# --- Redis Client (Fixed Recursion) ---
 redis_client = None
 if REDIS_HOST:
     try:
@@ -42,13 +40,10 @@ def redis_set(key, value):
         except: pass
 
 def redis_get(key):
-    """Fixed: Calls client.get() instead of self."""
     if redis_client:
         try: return redis_client.get(key)
         except: pass
     return None
-
-# --- Providers ---
 
 def wiki_search(query):
     cache_key = f"search:wiki:{hashlib.md5(query.encode()).hexdigest()}"
@@ -163,7 +158,7 @@ def search_all(query):
     return results
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Aggregated Search v3.3")
+    parser = argparse.ArgumentParser(description="Aggregated Search v3.4")
     parser.add_argument("source", choices=["google", "wiki", "reddit", "gnews", "scrapling", "all"])
     parser.add_argument("query")
     args = parser.parse_args()
