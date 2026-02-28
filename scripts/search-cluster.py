@@ -12,14 +12,14 @@ import subprocess
 import xml.etree.ElementTree as ET
 import re
 
-# --- Configuration (Standard v3.0) ---
+# --- Configuration (Standard v3.2) ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 SCRAPLING_PYTHON = os.getenv("SCRAPLING_PYTHON_PATH", "python3")
 STEALTH_SCRIPT = os.path.join(os.path.dirname(__file__), "stealth_fetch.py")
-USER_AGENT = os.getenv("SEARCH_USER_AGENT", "SearchCluster/3.0")
+USER_AGENT = os.getenv("SEARCH_USER_AGENT", "SearchCluster/3.2")
 
 # --- Internal Scrubber (IPI Defense) ---
 def internal_sanitize(text):
@@ -28,7 +28,7 @@ def internal_sanitize(text):
     text = "".join(ch for ch in text if ch.isprintable() or ch in ['\n', '\r', '\t'])
     return text.strip()
 
-# --- Redis Client (Optional Cache) ---
+# --- Redis Client (FIXED) ---
 redis_client = None
 if REDIS_HOST:
     try:
@@ -42,19 +42,18 @@ def redis_set(key, value):
         except: pass
 
 def redis_get(key):
+    """Fixed: Calls the actual redis_client and not the function itself."""
     if redis_client:
-        try: return redis_get(key)
+        try: return redis_client.get(key)
         except: pass
     return None
 
 # --- Providers ---
 
 def wiki_search(query):
-    """Wikipedia OpenSearch API integration."""
     cache_key = f"search:wiki:{hashlib.md5(query.encode()).hexdigest()}"
     cached = redis_get(cache_key)
     if cached: return json.loads(cached)
-    
     url = f"https://en.wikipedia.org/w/api.php?action=opensearch&search={urllib.parse.quote(query)}&limit=5&namespace=0&format=json"
     ctx = ssl.create_default_context()
     try:
@@ -75,11 +74,9 @@ def wiki_search(query):
     except: return []
 
 def reddit_search(query):
-    """Reddit JSON search integration."""
     cache_key = f"search:reddit:{hashlib.md5(query.encode()).hexdigest()}"
     cached = redis_get(cache_key)
     if cached: return json.loads(cached)
-    
     url = f"https://www.reddit.com/search.json?q={urllib.parse.quote(query)}&limit=5"
     ctx = ssl.create_default_context()
     try:
@@ -166,7 +163,7 @@ def search_all(query):
     return results
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Aggregated Search v3.0")
+    parser = argparse.ArgumentParser(description="Aggregated Search v3.2")
     parser.add_argument("source", choices=["google", "wiki", "reddit", "gnews", "scrapling", "all"])
     parser.add_argument("query")
     args = parser.parse_args()
