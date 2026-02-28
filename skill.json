@@ -1,13 +1,17 @@
 {
   "name": "search-cluster",
-  "version": "3.0.0",
-  "description": "Standard Aggregated Search Engine (Google, Wiki, Reddit, GNews, Scrapling).",
+  "version": "3.1.0",
+  "description": "Professional aggregated search engine. Features Google, Wiki, Reddit, GNews, and Scrapling.",
   "author": "Mema",
+  "homepage": "https://github.com/1999AZZAR/search-cluster-skill",
   "env_vars": [
-    { "name": "GOOGLE_API_KEY", "description": "Google API Key", "required": false },
-    { "name": "GOOGLE_CSE_ID", "description": "Google CSE ID", "required": false },
-    { "name": "SCRAPLING_PYTHON_PATH", "description": "Path to scrapling python binary", "required": false },
-    { "name": "REDIS_HOST", "description": "Optional Redis host for caching", "required": false }
+    { "name": "GOOGLE_API_KEY", "description": "Google API Key (Required for Google provider)", "required": false },
+    { "name": "GOOGLE_CSE_ID", "description": "Google CSE ID (Required for Google provider)", "required": false },
+    { "name": "SCRAPLING_PYTHON_PATH", "description": "Path to scrapling venv python binary", "required": false },
+    { "name": "REDIS_HOST", "description": "Optional Redis host for caching", "required": false },
+    { "name": "REDIS_PORT", "description": "Optional Redis port (default 6379)", "required": false },
+    { "name": "SEARCH_USER_AGENT", "description": "Custom User-Agent string", "required": false }
   ],
-  "binaries": ["python3"]
+  "binaries": ["python3"],
+  "python_dependencies": ["redis", "scrapling"]
 }
