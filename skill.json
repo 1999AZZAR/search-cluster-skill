@@ -1,6 +1,6 @@
 {
   "name": "search-cluster",
-  "version": "3.4.0",
+  "version": "3.5.1",
   "description": "Standard Aggregated Search Engine. Features Google, Wiki, Reddit, GNews, and Scrapling.",
   "author": "Mema",
   "homepage": "https://github.com/1999AZZAR/search-cluster-skill",

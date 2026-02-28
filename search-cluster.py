@@ -12,14 +12,15 @@ import subprocess
 import xml.etree.ElementTree as ET
 import re
 
-# Configuration
+# Configuration (v3.5.1)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 SCRAPLING_PYTHON = os.getenv("SCRAPLING_PYTHON_PATH", "python3")
+# Corrected: Script is now in the same directory as this file
 STEALTH_SCRIPT = os.path.join(os.path.dirname(__file__), "stealth_fetch.py")
-USER_AGENT = os.getenv("SEARCH_USER_AGENT", "SearchCluster/3.4")
+USER_AGENT = os.getenv("SEARCH_USER_AGENT", "SearchCluster/3.5.1")
 
 def internal_sanitize(text):
     if not text: return ""
@@ -158,7 +159,7 @@ def search_all(query):
     return results
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Aggregated Search v3.4")
+    parser = argparse.ArgumentParser(description="Aggregated Search v3.5.1")
     parser.add_argument("source", choices=["google", "wiki", "reddit", "gnews", "scrapling", "all"])
     parser.add_argument("query")
     args = parser.parse_args()
